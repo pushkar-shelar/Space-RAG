@@ -27,3 +27,15 @@ chroma_db/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Generated Space RAG data
+data/processed/
+
+# Local uploads
+data/uploads/
+
+# ChromaDB
+data/processed/chroma/
+
+# Model/cache files
+.cache/
