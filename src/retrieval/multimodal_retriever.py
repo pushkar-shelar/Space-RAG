@@ -1,469 +1,318 @@
-import sys
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Dict, List, Optional
+
+from src.retrieval.query_modality import QueryModalityDetector
+from src.retrieval.source_text_retriever import SourceTextRetriever
+from src.retrieval.source_visual_retriever import SourceVisualRetriever
 
 
-# Find the project root
-PROJECT_ROOT = (
-    Path(__file__).resolve().parent.parent.parent
-)
+class SourceAwareMultimodalRetriever:
+    """
+    Search the permanent corpus and the current private document separately.
 
-sys.path.insert(
-    0,
-    str(PROJECT_ROOT)
-)
+    The source label is retained internally for correct citation behavior, but
+    corpus provenance is intentionally hidden from the user-facing answer.
+    """
 
+    def __init__(
+        self,
+        corpus_root: str | Path,
+        session_root: Optional[str | Path] = None,
+    ):
+        self.corpus_root = Path(corpus_root)
+        self.session_root = Path(session_root) if session_root else None
+        self.detector = QueryModalityDetector()
 
-from src.indexing.reranker import Reranker
-from src.retrieval.text_retriever import TextRetriever
-from src.retrieval.dense_text_retriever import DenseTextRetriever
-from src.retrieval.visual_retriever import VisualRetriever
+        self.corpus_text = (
+            SourceTextRetriever(self.corpus_root, "corpus")
+            if self.corpus_root.exists()
+            else None
+        )
+        self.corpus_visual = (
+            SourceVisualRetriever(self.corpus_root, "corpus")
+            if self.corpus_root.exists()
+            else None
+        )
 
-class MultimodalRetriever:
+        self.private_text = (
+            SourceTextRetriever(self.session_root, "private")
+            if self.session_root and self.session_root.exists()
+            else None
+        )
+        self.private_visual = (
+            SourceVisualRetriever(self.session_root, "private")
+            if self.session_root and self.session_root.exists()
+            else None
+        )
 
-    def __init__(self):
-
-        print("=" * 70)
-        print("SPACE RAG - LOADING MULTIMODAL RETRIEVER")
-        print("=" * 70)
-
-        # BM25 retriever
-        print("\nLoading BM25 retriever...")
-
-        self.bm25_retriever = TextRetriever()
-
-
-        # Dense text retriever
-        print("\nLoading dense text retriever...")
-
-        self.dense_retriever = DenseTextRetriever()
-
-
-        # ColPali visual retriever
-        print("\nLoading ColPali visual retriever...")
-
-        self.visual_retriever = VisualRetriever()
-
-
-        # Reranker
-        print("\nLoading reranker...")
-
-        self.reranker = Reranker()
-
-
-        print("\n" + "=" * 70)
-        print("MULTIMODAL RETRIEVER READY")
-        print("=" * 70)
-
+    def _add_text_results(self, results: List[dict], bucket: Dict):
+        for result in results:
+            meta = result["metadata"]
+            key = (
+                result["source_type"],
+                meta.get("document"),
+                meta.get("page_number"),
+                meta.get("chunk_index"),
+            )
+            bucket[key] = {
+                "text": result["text"],
+                "source_type": result["source_type"],
+                "source_id": result.get("source_id"),
+                "document": meta.get("document"),
+                "page_number": meta.get("page_number"),
+                "text_path": meta.get("text_path"),
+                "bm25_score": result.get("bm25_score", 0.0),
+                "dense_score": result.get("dense_score", 0.0),
+                "text_score": result.get("text_score", 0.0),
+                "visual_score": 0.0,
+            }
 
     def retrieve(
         self,
-        query,
-        top_k=5,
-        retrieval_k=10
-    ):
+        query: str,
+        top_k: int = 5,
+        retrieval_k: int = 10,
+    ) -> dict:
+        info = self.detector.detect(query)
+        candidates: Dict[tuple, dict] = {}
 
-        print("\n")
-        print("=" * 70)
-        print("SPACE RAG - MULTIMODAL RETRIEVAL")
-        print("=" * 70)
+        # Always search corpus and private text so a private session can use
+        # both the uploaded paper and the permanent knowledge corpus.
+        if self.corpus_text:
+            self._add_text_results(
+                self.corpus_text.search(query, retrieval_k),
+                candidates,
+            )
+        if self.private_text:
+            self._add_text_results(
+                self.private_text.search(query, retrieval_k),
+                candidates,
+            )
 
-        print(
-            f"Query: {query}"
-        )
-
-
-        # -------------------------------------------------
-        # 1. BM25 retrieval
-        # -------------------------------------------------
-
-        print("\n[1/3] Running BM25 retrieval...")
-
-        bm25_results = (
-            self.bm25_retriever.retrieve(
+        visual_enabled = info.modality in {"visual", "multimodal"}
+        if visual_enabled:
+            self._add_visual_results(
+                self.corpus_visual,
                 query,
-                top_k=retrieval_k
+                retrieval_k,
+                candidates,
             )
-        )
-
-
-        # -------------------------------------------------
-        # 2. Dense text retrieval
-        # -------------------------------------------------
-
-        print("\n[2/3] Running dense text retrieval...")
-
-        dense_results = (
-            self.dense_retriever.retrieve(
+            self._add_visual_results(
+                self.private_visual,
                 query,
-                top_k=retrieval_k
-            )
-        )
-
-
-        # -------------------------------------------------
-        # 3. ColPali visual retrieval
-        # -------------------------------------------------
-
-        print("\n[3/3] Running ColPali visual retrieval...")
-
-        visual_results = (
-            self.visual_retriever.retrieve(
-                query,
-                top_k=retrieval_k
-            )
-        )
-
-
-        # -------------------------------------------------
-        # Store RRF scores
-        # -------------------------------------------------
-
-        fused_scores = {}
-
-        # Store result information
-        result_data = {}
-
-
-        # -------------------------------------------------
-        # BM25 → RRF
-        # -------------------------------------------------
-
-        for rank, result in enumerate(
-            bm25_results,
-            start=1
-        ):
-
-            key = (
-                result["document"],
-                result["page_number"]
+                retrieval_k,
+                candidates,
             )
 
-            rrf_score = 1 / (60 + rank)
-
-            fused_scores[key] = (
-                fused_scores.get(key, 0)
-                + rrf_score
-            )
-
-            result_data[key] = {
-                "document": result["document"],
-                "page_number": result["page_number"],
-                "text_results": [],
-                "visual_results": []
+        if not candidates:
+            return {
+                "modality": info.modality,
+                "page_reference": info.page_reference,
+                "results": [],
+                "source_mix": {"corpus": 0, "private": 0},
             }
 
-            result_data[key]["text_results"].append(
-                result
+        # Candidate-level adaptive fusion.
+        values = list(candidates.values())
+        text_values = [x["text_score"] for x in values]
+        visual_values = [x["visual_score"] for x in values]
+
+        tmin, tmax = min(text_values), max(text_values)
+        vmin, vmax = min(visual_values), max(visual_values)
+
+        for item in values:
+            t = (
+                (item["text_score"] - tmin) / (tmax - tmin)
+                if tmax > tmin else item["text_score"]
+            )
+            v = (
+                (item["visual_score"] - vmin) / (vmax - vmin)
+                if vmax > vmin else 0.0
             )
 
+            if info.modality == "text":
+                item["fusion_score"] = 0.80 * t + 0.20 * v
+            elif info.modality == "visual":
+                item["fusion_score"] = 0.25 * t + 0.75 * v
+            else:
+                item["fusion_score"] = 0.40 * t + 0.60 * v
 
-        # -------------------------------------------------
-        # Dense → RRF
-        # -------------------------------------------------
+            # Small private-session preference when evidence is otherwise equal.
+            # This is a tie-break, not the only retrieval signal.
+            if item["source_type"] == "private":
+                item["fusion_score"] += 0.03
 
-        for rank, result in enumerate(
-            dense_results,
-            start=1
-        ):
+        # Protect explicit page references.
+        if info.page_reference is not None:
+            for item in values:
+                if item.get("page_number") == info.page_reference:
+                    item["fusion_score"] += 0.40
 
+        values.sort(key=lambda x: x["fusion_score"], reverse=True)
+        values = values[:retrieval_k]
+
+        # Rerank candidates with BGE cross-encoder if text candidates exist
+        if values and len(values) > 1:
+            self._rerank_candidates(values, query)
+
+        # Cross-modal verification is only attempted for a visual/multimodal query.
+        if info.modality in {"visual", "multimodal"}:
+            self._verify_selected(values, query, limit=min(2, len(values)))
+
+        final = values[:top_k]
+        for rank, item in enumerate(final, start=1):
+            item["rank"] = rank
+            item["provenance"] = self._public_provenance(item)
+
+        source_mix = {
+            "corpus": sum(x["source_type"] == "corpus" for x in final),
+            "private": sum(x["source_type"] == "private" for x in final),
+        }
+
+        return {
+            "modality": info.modality,
+            "page_reference": info.page_reference,
+            "results": final,
+            "source_mix": source_mix,
+        }
+
+    def _rerank_candidates(self, candidates: List[dict], query: str):
+        """Cross-encoder reranking over fused candidates."""
+        try:
+            from sentence_transformers import CrossEncoder
+
+            if not hasattr(self, "_reranker") or self._reranker is None:
+                self._reranker = CrossEncoder("BAAI/bge-reranker-base")
+
+            text_items = [c for c in candidates if (c.get("text") or "").strip()]
+            if not text_items:
+                return
+
+            pairs = [(query, c["text"][:1000]) for c in text_items]
+            scores = self._reranker.predict(pairs)
+
+            for item, bge_score in zip(text_items, scores):
+                item["bge_score"] = float(bge_score)
+                norm_bge = max(0.0, min(1.0, float(bge_score)))
+                private_bonus = 0.05 if item.get("source_type") == "private" else 0.0
+                item["fusion_score"] = 0.60 * item.get("fusion_score", 0.0) + 0.40 * norm_bge + private_bonus
+
+            candidates.sort(key=lambda x: (x["fusion_score"], x.get("source_type") == "private"), reverse=True)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _add_visual_results(retriever, query, top_k, bucket):
+        if retriever is None or not retriever.available():
+            return
+        for result in retriever.search(query, top_k):
+            meta = result.get("metadata", {})
+            page = meta.get("page_number")
             key = (
-                result["document"],
-                result["page_number"]
+                result["source_type"],
+                meta.get("document"),
+                page,
+                "visual",
+            )
+            existing = bucket.get(key)
+            if existing is None:
+                bucket[key] = {
+                    "text": "",
+                    "source_type": result["source_type"],
+                    "source_id": result.get("source_id"),
+                    "document": meta.get("document"),
+                    "page_number": page,
+                    "text_path": None,
+                    "bm25_score": 0.0,
+                    "dense_score": 0.0,
+                    "text_score": 0.0,
+                    "visual_score": result.get("visual_score", 0.0),
+                    "page_image": result.get("path"),
+                }
+            else:
+                existing["visual_score"] = max(
+                    existing.get("visual_score", 0.0),
+                    result.get("visual_score", 0.0),
+                )
+                existing["page_image"] = result.get("path")
+
+    def _verify_selected(self, results, query, limit=2):
+        try:
+            from src.verification.cross_modal_verifier import CrossModalVerifier
+        except Exception:
+            return
+
+        verifier = None
+        for item in results[:limit]:
+            image = item.get("page_image")
+            if not image:
+                continue
+
+            # Resolve associated PDF path for verification
+            pdf_path = None
+            if item.get("source_type") == "corpus":
+                corpus_dir = (
+                    self.corpus_root.parent / "corpus"
+                    if self.corpus_root.name == "corpus_index"
+                    else self.corpus_root
+                )
+                doc_name = item.get("document") or ""
+                candidate_pdf = corpus_dir / f"{doc_name}.pdf"
+                if candidate_pdf.exists():
+                    pdf_path = candidate_pdf
+                else:
+                    matches = list(corpus_dir.glob(f"*{doc_name}*.pdf"))
+                    if matches:
+                        pdf_path = matches[0]
+            elif self.session_root:
+                doc_dir = Path(self.session_root) / "document"
+                pdfs = list(doc_dir.glob("*.pdf"))
+                if pdfs:
+                    pdf_path = pdfs[0]
+
+            if not pdf_path or not Path(pdf_path).exists():
+                continue
+
+            page_num = item.get("page_number") or 1
+            claim_text = (
+                item.get("text")
+                or f"Figure on page {page_num} describes remote sensing and mission architecture."
             )
 
-            rrf_score = 1 / (60 + rank)
-
-            fused_scores[key] = (
-                fused_scores.get(key, 0)
-                + rrf_score
-            )
-
-            if key not in result_data:
-
-                result_data[key] = {
-                    "document": result["document"],
-                    "page_number": result["page_number"],
-                    "text_results": [],
-                    "visual_results": []
+            try:
+                if verifier is None:
+                    verifier = CrossModalVerifier()
+                verification = verifier.verify(
+                    pdf_path=str(pdf_path),
+                    page_number=int(page_num),
+                    text_claim=claim_text,
+                    image_path=str(image),
+                    query=query,
+                )
+                item["verification"] = verification
+            except Exception as exc:
+                item["verification"] = {
+                    "status": "UNAVAILABLE",
+                    "confidence": 0.0,
+                    "error": str(exc),
                 }
 
-            result_data[key]["text_results"].append(
-                result
-            )
-
-
-        # -------------------------------------------------
-        # ColPali → RRF
-        # -------------------------------------------------
-
-        for rank, result in enumerate(
-            visual_results,
-            start=1
-        ):
-
-            key = (
-                result["document"],
-                result["page_number"]
-            )
-
-            rrf_score = 1 / (60 + rank)
-
-            fused_scores[key] = (
-                fused_scores.get(key, 0)
-                + rrf_score
-            )
-
-            if key not in result_data:
-
-                result_data[key] = {
-                    "document": result["document"],
-                    "page_number": result["page_number"],
-                    "text_results": [],
-                    "visual_results": []
-                }
-
-            result_data[key]["visual_results"].append(
-                result
-            )
-
-
-        # -------------------------------------------------
-        # Sort fused results
-        # -------------------------------------------------
-
-        ranked_results = sorted(
-            fused_scores.items(),
-            key=lambda item: item[1],
-            reverse=True
-        )
-
-
-        # -------------------------------------------------
-        # Build RRF candidate results
-        # -------------------------------------------------
-
-        candidates = []
-
-        for key, fused_score in ranked_results[:retrieval_k]:
-
-            result = result_data[key].copy()
-
-            result["fusion_score"] = (
-                float(fused_score)
-            )
-
-            candidates.append(
-                result
-            )
-
-
-        # -------------------------------------------------
-        # Rerank candidates
-        # -------------------------------------------------
-
-        print("\n")
-        print("=" * 70)
-        print("RERANKING CANDIDATES")
-        print("=" * 70)
-
-        results = self.reranker.rerank(
-            query,
-            candidates,
-            top_k=top_k
-        )
-
-        # -------------------------------------------------
-        # Build clean provenance information
-        # -------------------------------------------------
-
-        for result in results:
-
-            best_text = ""
-
-            if result["text_results"]:
-
-                best_text_result = max(
-                    result["text_results"],
-                    key=lambda item:
-                        item.get("score", 0)
-                )
-
-                best_text = best_text_result.get(
-                    "text",
-                    ""
-                )
-
-            best_visual = None
-
-            if result["visual_results"]:
-
-                best_visual = max(
-                    result["visual_results"],
-                    key=lambda item:
-                        item.get("score", 0)
-                )
-
-            result["provenance"] = {
-
-                "document": result["document"],
-
-                "page_number": result[
-                    "page_number"
-                ],
-
-                "text_source": (
-                    best_text_result.get("source")
-                    if result["text_results"]
-                    else None
-                ),
-
-                "page_image": (
-                    best_visual.get("image_path")
-                    if best_visual
-                    else None
-                )
+    @staticmethod
+    def _public_provenance(item: dict):
+        if item["source_type"] == "private":
+            return {
+                "source_type": "private",
+                "document": item.get("document"),
+                "page_number": item.get("page_number"),
             }
+        # Never expose corpus document names, paths, or internal IDs to UI/LLM.
+        return {"source_type": "corpus"}
 
-            result["evidence_summary"] = {
-
-                "text_available": bool(
-                    result["text_results"]
-                ),
-
-                "visual_available": bool(
-                    result["visual_results"]
-                ),
-
-                "text_evidence_count": len(
-                    result["text_results"]
-                ),
-
-                "visual_evidence_count": len(
-                    result["visual_results"]
-                )
-            }
-
-            result["scores"] = {
-
-                "fusion": float(
-                    result["fusion_score"]
-                ),
-
-                "reranker": float(
-                    result["reranker_score"]
-                ),
-
-                "visual": (
-                    float(best_visual["score"])
-                    if best_visual
-                    else None
-                )
-            }
-
-            result["retrieval_id"] = (
-                f"{result['document']}"
-                f"_page_{result['page_number']:03d}"
-            )
-        # -------------------------------------------------
-        # Display final results
-        # -------------------------------------------------
-
-        print("\n")
-        print("=" * 70)
-        print("FINAL MULTIMODAL RESULTS")
-        print("=" * 70)
-
-        for rank, result in enumerate(
-            results,
-            start=1
-        ):
-
-            print("\n" + "-" * 70)
-
-            print(
-                f"Rank: {rank}"
-            )
-
-            print(
-                f"Document: {result['document']}"
-            )
-
-            print(
-                f"Page: {result['page_number']}"
-            )
-
-            print(
-                f"Retrieval ID: "
-                f"{result['retrieval_id']}"
-            )
-
-            print(
-                f"Fusion Score: "
-                f"{result['scores']['fusion']:.6f}"
-            )
-
-            print(
-                f"Reranker Score: "
-                f"{result['scores']['reranker']:.4f}"
-            )
-
-            print(
-                f"Visual Score: "
-                f"{result['scores']['visual']}"
-            )
-
-            print(
-                f"Text Evidence: "
-                f"{result['evidence_summary']['text_evidence_count']}"
-            )
-
-            print(
-                f"Visual Evidence: "
-                f"{result['evidence_summary']['visual_evidence_count']}"
-            )
-
-            print(
-                f"Text Available: "
-                f"{result['evidence_summary']['text_available']}"
-            )
-
-            print(
-                f"Visual Available: "
-                f"{result['evidence_summary']['visual_available']}"
-            )
-
-            print(
-                f"Text Source: "
-                f"{result['provenance']['text_source']}"
-            )
-
-            print(
-                f"Page Image: "
-                f"{result['provenance']['page_image']}"
-            )
-
-        print("\n" + "=" * 70)
-        print("MULTIMODAL RETRIEVAL COMPLETE")
-        print("=" * 70)
-
-        return results
-
-
-# -------------------------------------------------
-# Test the multimodal retriever
-# -------------------------------------------------
-
-if __name__ == "__main__":
-
-    print("\n")
-    print("=" * 70)
-    print("LOADING MULTIMODAL RETRIEVER")
-    print("=" * 70)
-
-    retriever = MultimodalRetriever()
-
-    results = retriever.retrieve(
-        "What are the main goals of the TROPICS mission?",
-        top_k=5,
-        retrieval_k=10
-    )
+    def close(self):
+        """Cleanly close all underlying Chroma database clients."""
+        if hasattr(self, "corpus_text") and self.corpus_text is not None:
+            self.corpus_text.close()
+        if hasattr(self, "private_text") and self.private_text is not None:
+            self.private_text.close()

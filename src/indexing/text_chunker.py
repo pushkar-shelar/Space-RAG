@@ -1,111 +1,61 @@
+from __future__ import annotations
+
+import re
 from pathlib import Path
+from typing import Dict, List
 
 
-def chunk_text(
-    text,
-    chunk_size=1000,
-    chunk_overlap=200
-):
+PAGE_RE = re.compile(r"_page_(\d+)")
 
-    chunks = []
 
-    start = 0
-
-    while start < len(text):
-
-        end = start + chunk_size
-
-        chunk = text[start:end]
-
-        if chunk.strip():
-
-            chunks.append(chunk.strip())
-
-        start = end - chunk_overlap
-
-    return chunks
+def _page_number(path: Path) -> int:
+    match = PAGE_RE.search(path.stem)
+    return int(match.group(1)) if match else -1
 
 
 def chunk_document(
-    text_dir="data/processed/text"
-):
+    text_dir: str | Path,
+    source_type: str,
+    source_id: str,
+    chunk_size: int = 1000,
+    overlap: int = 200,
+) -> List[Dict]:
+    """Chunk only the supplied source directory."""
+    if overlap >= chunk_size:
+        raise ValueError("overlap must be smaller than chunk_size")
 
     text_dir = Path(text_dir)
+    files = sorted(text_dir.rglob("*.txt"), key=lambda p: (_page_number(p), str(p)))
+    chunks: List[Dict] = []
 
-    all_chunks = []
+    for path in files:
+        text = path.read_text(encoding="utf-8", errors="ignore").strip()
+        if not text:
+            continue
 
-    text_files = sorted(
-        text_dir.glob("*.txt")
-    )
+        page_number = _page_number(path)
+        start = 0
+        chunk_index = 0
 
-    for text_file in text_files:
+        while start < len(text):
+            end = min(start + chunk_size, len(text))
+            chunk_text = text[start:end].strip()
+            if chunk_text:
+                chunks.append(
+                    {
+                        "id": f"{source_id}:{page_number}:{chunk_index}",
+                        "text": chunk_text,
+                        "source_type": source_type,
+                        "source_id": source_id,
+                        "document": path.name.rsplit("_page_", 1)[0],
+                        "page_number": page_number,
+                        "chunk_index": chunk_index,
+                        "text_path": str(path),
+                    }
+                )
+            if end >= len(text):
+                break
+            start = end - overlap
+            chunk_index += 1
 
-        with open(
-            text_file,
-            "r",
-            encoding="utf-8"
-        ) as file:
-
-            text = file.read()
-
-        chunks = chunk_text(text)
-
-        for chunk_number, chunk in enumerate(
-            chunks,
-            start=1
-        ):
-
-            all_chunks.append(
-                {
-                    "document": text_file.name.split(
-                        "_page_"
-                    )[0],
-                    "page_number": int(
-                        text_file.stem.split("_")[-1]
-                    ),
-                    "chunk_id": chunk_number,
-                    "text": chunk,
-                    "source": str(text_file),
-                    "modality": "text"
-                }
-            )
-
-    return all_chunks
-
-
-if __name__ == "__main__":
-
-    chunks = chunk_document()
-
-    print("\n")
-    print("=" * 60)
-    print("TEXT CHUNKING")
-    print("=" * 60)
-
-    print(
-        f"Total chunks: {len(chunks)}"
-    )
-
-    for chunk in chunks[:5]:
-
-        print("\n" + "-" * 60)
-
-        print(
-            f"Document: {chunk['document']}"
-        )
-
-        print(
-            f"Page: {chunk['page_number']}"
-        )
-
-        print(
-            f"Chunk: {chunk['chunk_id']}"
-        )
-
-        print(
-            f"Characters: {len(chunk['text'])}"
-        )
-
-        print(
-            chunk["text"][:300]
-        )
+    return chunks

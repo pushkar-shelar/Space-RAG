@@ -1,68 +1,38 @@
-import pymupdf
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Optional
+
+import pymupdf
 
 
-def render_pdf_pages(pdf_path, output_dir="data/processed/pages"):
+def render_pdf_pages(pdf_path, output_dir: Optional[str | Path] = None):
+    """Render full PDF pages for visual retrieval."""
     pdf_path = Path(pdf_path)
-    output_dir = Path(output_dir)
-
+    output_dir = Path(output_dir or (pdf_path.parent.parent / "pages"))
     output_dir.mkdir(parents=True, exist_ok=True)
 
     document = pymupdf.open(pdf_path)
+    rendered = []
+    try:
+        for page_number, page in enumerate(document, start=1):
+            pixmap = page.get_pixmap(
+                matrix=pymupdf.Matrix(2, 2),
+                alpha=False,
+            )
+            image_path = output_dir / f"{pdf_path.stem}_page_{page_number:03d}.png"
+            pixmap.save(image_path)
+            rendered.append(
+                {
+                    "document": pdf_path.name,
+                    "page_number": page_number,
+                    "image_path": str(image_path),
+                    "modality": "page_image",
+                    "width": pixmap.width,
+                    "height": pixmap.height,
+                }
+            )
+    finally:
+        document.close()
 
-    rendered_pages = []
-
-    print(f"Document: {pdf_path.name}")
-    print(f"Pages: {len(document)}")
-
-    for page_number, page in enumerate(document):
-
-        page_number_display = page_number + 1
-
-        pixmap = page.get_pixmap(
-            matrix=pymupdf.Matrix(2, 2),
-            alpha=False
-        )
-
-        image_filename = (
-            f"{pdf_path.stem}"
-            f"_page_{page_number_display:03d}"
-            f".png"
-        )
-
-        image_path = output_dir / image_filename
-
-        pixmap.save(image_path)
-
-        page_info = {
-            "document": pdf_path.name,
-            "page_number": page_number_display,
-            "image_path": str(image_path),
-            "modality": "page_image",
-            "width": pixmap.width,
-            "height": pixmap.height,
-        }
-
-        rendered_pages.append(page_info)
-
-        print(
-            f"Rendered page {page_number_display}: "
-            f"{image_filename}"
-        )
-
-    document.close()
-
-    return rendered_pages
-
-
-if __name__ == "__main__":
-
-    pages = render_pdf_pages(
-        r"C:\Users\Pushkar Shelar\Desktop\Space RAG\data\corpus\GSFC-HDBK-8007_Admn Ext_1.pdf"
-    )
-
-    print("\n")
-    print("=" * 60)
-    print("PAGE RENDERING COMPLETE")
-    print("=" * 60)
-    print(f"Total pages rendered: {len(pages)}") 
+    return rendered

@@ -1,186 +1,139 @@
+import re
 import sys
-import json
 from pathlib import Path
 
 import torch
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-# Find the indexing folder
-INDEXING_DIR = (
-    Path(__file__).resolve().parent.parent / "indexing"
-)
-
-sys.path.insert(0, str(INDEXING_DIR))
-
-from colpali_embedder import ColPaliEmbedder
+from src.indexing.colpali_embedder import ColPaliEmbedder
 
 
 class VisualRetriever:
 
     def __init__(
         self,
-        embeddings_dir="data/processed/embeddings/TROPICS"
+        embeddings_root="data/processed/embeddings",
+        pages_dir="data/processed/pages"
     ):
-
-        self.embeddings_dir = Path(
-            embeddings_dir
-        )
-
-        # Path to the document manifest
-        self.manifest_path = (
-            Path("data")
-            / "processed"
-            / "metadata"
-            / "document_manifest.json"
-        )
-
-        # Load the document manifest
-        with open(
-            self.manifest_path,
-            "r",
-            encoding="utf-8"
-        ) as file:
-
-            self.manifest = json.load(file)
-
+        self.embeddings_root = Path(embeddings_root)
+        self.pages_dir = Path(pages_dir)
         self.embedder = ColPaliEmbedder()
 
+        print(f"ColPali embeddings root: {self.embeddings_root}")
+        print(f"Rendered pages directory: {self.pages_dir}")
+
+    @staticmethod
+    def parse_embedding_name(embedding_path):
+        stem = Path(embedding_path).stem
+        match = re.match(
+            r"^(?P<document>.+)_page_(?P<page>\d+)$",
+            stem
+        )
+        if match is None:
+            return None
+        return {
+            "document": match.group("document"),
+            "page_number": int(match.group("page"))
+        }
 
     def create_query_embedding(self, query):
-
-        batch = self.embedder.processor.process_queries(
-            [query]
-        )
-
+        batch = self.embedder.processor.process_queries([query])
         batch = {
             key: value.to(self.embedder.device)
             for key, value in batch.items()
         }
-
         with torch.no_grad():
-
-            query_embedding = self.embedder.model(
-                **batch
-            )
-
-        return query_embedding
-
+            return self.embedder.model(**batch)
 
     def retrieve(self, query, top_k=5):
-
-        print("=" * 60)
+        print("\n" + "=" * 60)
         print("SPACE RAG - VISUAL RETRIEVAL")
         print("=" * 60)
-
         print(f"Query: {query}")
 
-        print("\nGenerating query embedding...")
-
-        query_embedding = self.create_query_embedding(
-            query
-        )
-
         page_files = sorted(
-            self.embeddings_dir.glob("*.pt")
+            self.embeddings_root.glob("**/*.pt")
         )
 
-        print(
-            f"Comparing against "
-            f"{len(page_files)} pages..."
-        )
+        if not page_files:
+            print("\nNo ColPali page embeddings found.")
+            return []
+
+        print(f"\nComparing against {len(page_files)} page embeddings...")
+        print("\nGenerating query embedding...")
+        query_embedding = self.create_query_embedding(query)
 
         page_embeddings = []
+        valid_page_files = []
 
         for page_file in page_files:
+            try:
+                embedding = torch.load(
+                    page_file,
+                    map_location="cpu",
+                    weights_only=True
+                )
+                page_embeddings.append(embedding.squeeze(0))
+                valid_page_files.append(page_file)
+            except Exception as error:
+                print(f"Warning: Could not load {page_file.name}: {error}")
 
-            embedding = torch.load(
-                page_file,
-                map_location="cpu"
-            )
+        if not page_embeddings:
+            return []
 
-            page_embeddings.append(
-                embedding.squeeze(0)
-            )
-
-        scores = (
-            self.embedder.processor.score_multi_vector(
-                query_embedding.cpu(),
-                page_embeddings
-            )
+        scores = self.embedder.processor.score_multi_vector(
+            query_embedding.cpu(),
+            page_embeddings
         )
 
         results = []
 
-        for page_file, score in zip(
-            page_files,
-            scores[0]
-        ):
-
-            # Example:
-            # TROPICS_page_007
-            page_name = page_file.stem
-
-            # Extract page number from filename
-            # TROPICS_page_007 → 7
-            page_number = int(
-                page_name.split("_")[-1]
-            )
-
-            # Find matching page information
-            # inside the document manifest
-            page_info = next(
-                (
-                    page
-                    for page in self.manifest["pages"]
-                    if page["page_number"] == page_number
-                ),
-                None
-            )
-
-            # Safety check
-            if page_info is None:
-                print(
-                    f"Warning: Page {page_number} "
-                    f"not found in manifest."
-                )
+        for page_file, score in zip(valid_page_files, scores[0]):
+            info = self.parse_embedding_name(page_file)
+            if info is None:
                 continue
 
-            # Create provenance information
-            result = {
-                "document": Path(
-                self.manifest["document"]).stem,
+            document = info["document"]
+            page_number = info["page_number"]
+            page_image = self.pages_dir / f"{document}_page_{page_number:03d}.png"
+
+            results.append({
+                "document": document,
                 "page_number": page_number,
-                "page_image": page_info["page_image"]["path"],
-                "score": score.item(),
-                "modality": "visual",
-                "image_path": self.manifest["pages"][
-                    page_number - 1
-                ]["page_image"]["path"],
+                "page_image": str(page_image),
+                "image_path": str(page_image),
+                "embedding_path": str(page_file),
+                "score": float(score.item()),
                 "modality": "page_image"
-            }
+            })
 
-            results.append(result)
+        # Prevent duplicate document/page results when legacy and new
+        # embedding directories both contain the same page.
+        unique = {}
+        for result in results:
+            key = (result["document"], result["page_number"])
+            if key not in unique or result["score"] > unique[key]["score"]:
+                unique[key] = result
 
-        results.sort(
-            key=lambda item: item["score"],
-            reverse=True
-        )
+        results = list(unique.values())
+        results.sort(key=lambda item: item["score"], reverse=True)
 
-        print("\n" + "=" * 60)
-        print("TOP RESULTS")
-        print("=" * 60)
-
-        for rank, result in enumerate(
-            results[:top_k],
-            start=1
-        ):
-
+        for rank, result in enumerate(results[:top_k], start=1):
             print(
-                f"{rank}. "
-                f"{result['document']} "
-                f"| Page {result['page_number']} "
-                f"| score: "
-                f"{result['score']:.4f}"
+                f"{rank}. {result['document']} | "
+                f"Page {result['page_number']} | "
+                f"score: {result['score']:.4f}"
             )
 
         return results[:top_k]
+
+
+if __name__ == "__main__":
+    retriever = VisualRetriever()
+    retriever.retrieve(
+        "What does the graph on page 7 show?",
+        top_k=5
+    )

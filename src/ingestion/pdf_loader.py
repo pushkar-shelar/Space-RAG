@@ -1,111 +1,47 @@
-import pymupdf
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Optional
+
+import pymupdf
 
 
-def load_pdf(pdf_path):
+def load_pdf(pdf_path, image_output_dir: Optional[str | Path] = None):
+    """Extract embedded raster images into a supplied directory."""
     pdf_path = Path(pdf_path)
-
-    image_output_dir = (
-        Path("data")
-        / "processed"
-        / "images"
-    )
-
-    image_output_dir.mkdir(
-        parents=True,
-        exist_ok=True
-    )
+    output_dir = Path(image_output_dir or (pdf_path.parent.parent / "images"))
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     document = pymupdf.open(pdf_path)
-
     pages = []
 
-    print(f"Document: {pdf_path.name}")
-    print(f"Pages: {len(document)}")
-
-    for page_number, page in enumerate(document):
-
-        page_number_display = page_number + 1
-
-        images = page.get_images(full=True)
-
-        page_data = {
-            "document": pdf_path.name,
-            "page_number": page_number_display,
-            "images": []
-        }
-
-        print("\n" + "=" * 60)
-        print(f"PAGE {page_number_display}")
-        print("=" * 60)
-        print(f"Images found: {len(images)}")
-
-        for image_number, image in enumerate(images):
-
-            xref = image[0]
-
-            image_data = document.extract_image(xref)
-
-            image_bytes = image_data["image"]
-            image_extension = image_data["ext"]
-
-            image_filename = (
-                f"{pdf_path.stem}"
-                f"_page_{page_number_display}"
-                f"_img_{image_number + 1}"
-                f".{image_extension}"
-            )
-
-            image_path = (
-                image_output_dir
-                / image_filename
-            )
-
-            with open(
-                image_path,
-                "wb"
-            ) as image_file:
-
-                image_file.write(image_bytes)
-
-            image_info = {
-                "image_id": image_number + 1,
-                "path": str(image_path),
-                "extension": image_extension,
-                "xref": xref,
-                "modality": "image"
+    try:
+        for page_number, page in enumerate(document, start=1):
+            page_data = {
+                "document": pdf_path.name,
+                "page_number": page_number,
+                "images": [],
             }
 
-            page_data["images"].append(
-                image_info
-            )
-
-            print(
-                f"  Image {image_number + 1}: "
-                f"{image_filename}"
-            )
-
-        pages.append(page_data)
-
-    document.close()
-
-    print("\n" + "=" * 60)
-    print("IMAGE EXTRACTION COMPLETE")
-    print("=" * 60)
-    print(f"Total pages processed: {len(pages)}")
-
-    total_images = sum(
-        len(page["images"])
-        for page in pages
-    )
-
-    print(f"Total images extracted: {total_images}")
+            for image_number, image in enumerate(page.get_images(full=True), start=1):
+                xref = image[0]
+                image_data = document.extract_image(xref)
+                extension = image_data["ext"]
+                image_path = output_dir / (
+                    f"{pdf_path.stem}_page_{page_number}_img_{image_number}.{extension}"
+                )
+                image_path.write_bytes(image_data["image"])
+                page_data["images"].append(
+                    {
+                        "image_id": image_number,
+                        "path": str(image_path),
+                        "extension": extension,
+                        "xref": xref,
+                        "modality": "image",
+                    }
+                )
+            pages.append(page_data)
+    finally:
+        document.close()
 
     return pages
-
-
-if __name__ == "__main__":
-
-    pages = load_pdf(
-        r"data\corpus\GSFC-HDBK-8007_Admn Ext_1.pdf"
-    )

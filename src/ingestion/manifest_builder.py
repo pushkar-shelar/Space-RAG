@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import json
 from pathlib import Path
+from typing import Optional
 
 
 def build_manifest(
@@ -7,128 +10,57 @@ def build_manifest(
     text_pages,
     image_pages,
     rendered_pages,
-    output_dir="data/processed/metadata"
+    output_dir: Optional[str | Path] = None,
+    session_id: Optional[str] = None,
+    session_root: Optional[str | Path] = None,
+    source_type: str = "private",
 ):
-
     pdf_path = Path(pdf_path)
-    output_dir = Path(output_dir)
+    output_dir = Path(output_dir or (pdf_path.parent.parent / "metadata"))
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    output_dir.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    total_pages = max(
-        len(text_pages),
-        len(image_pages),
-        len(rendered_pages)
-    )
-
+    total_pages = max(len(text_pages), len(image_pages), len(rendered_pages))
     pages = []
 
     for page_number in range(1, total_pages + 1):
+        text_page = next((p for p in text_pages if p["page_number"] == page_number), None)
+        image_page = next((p for p in image_pages if p["page_number"] == page_number), None)
+        rendered_page = next((p for p in rendered_pages if p["page_number"] == page_number), None)
 
         page_record = {
             "page_number": page_number,
             "text": None,
             "page_image": None,
-            "embedded_images": []
+            "embedded_images": [],
         }
-
-        # -------------------------
-        # Text
-        # -------------------------
-
-        text_page = next(
-            (
-                page
-                for page in text_pages
-                if page["page_number"] == page_number
-            ),
-            None
-        )
-
         if text_page:
-
             page_record["text"] = {
                 "path": text_page["text_path"],
                 "modality": "text",
-                "char_count": text_page["char_count"]
+                "char_count": text_page["char_count"],
             }
-
-        # -------------------------
-        # Embedded images
-        # -------------------------
-
-        image_page = next(
-            (
-                page
-                for page in image_pages
-                if page["page_number"] == page_number
-            ),
-            None
-        )
-
         if image_page:
-
-            page_record["embedded_images"] = (
-                image_page["images"]
-            )
-
-        # -------------------------
-        # Rendered page image
-        # -------------------------
-
-        rendered_page = next(
-            (
-                page
-                for page in rendered_pages
-                if page["page_number"] == page_number
-            ),
-            None
-        )
-
+            page_record["embedded_images"] = image_page["images"]
         if rendered_page:
-
             page_record["page_image"] = {
                 "path": rendered_page["image_path"],
                 "modality": "page_image",
                 "width": rendered_page["width"],
-                "height": rendered_page["height"]
+                "height": rendered_page["height"],
             }
-
         pages.append(page_record)
 
     manifest = {
+        "session_id": session_id,
+        "session_root": str(session_root) if session_root is not None else None,
+        "source_type": source_type,
         "document": pdf_path.name,
         "document_path": str(pdf_path),
         "total_pages": total_pages,
-        "pages": pages
+        "pages": pages,
     }
 
-    manifest_path = (
-        output_dir
-        / "document_manifest.json"
-    )
-
-    with open(
-        manifest_path,
-        "w",
-        encoding="utf-8"
-    ) as file:
-
-        json.dump(
-            manifest,
-            file,
-            indent=4,
-            ensure_ascii=False
-        )
-
-    print("\n" + "=" * 60)
-    print("UNIFIED MANIFEST CREATED")
-    print("=" * 60)
-    print(f"Document: {pdf_path.name}")
-    print(f"Pages: {total_pages}")
-    print(f"Manifest: {manifest_path}")
-
+    path = output_dir / "document_manifest.json"
+    path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    manifest["manifest_path"] = str(path)
     return manifest

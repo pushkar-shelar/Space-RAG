@@ -10,6 +10,7 @@ __pycache__/
 # Environment variables and secrets
 .env
 .env.*
+!.env.example
 
 # IDE files
 .vscode/
@@ -39,3 +40,9 @@ data/processed/chroma/
 
 # Model/cache files
 .cache/
+
+# PDF test documents
+*.pdf
+
+# Redundant duplicate folder
+space_rag_source_aware/
