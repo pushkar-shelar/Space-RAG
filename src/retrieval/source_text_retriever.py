@@ -23,8 +23,9 @@ class SourceTextRetriever:
         self.chroma = ChromaTextIndex(self.root / "chroma", collection_name)
 
     def search(self, query: str, top_k: int = 10) -> List[dict]:
-        bm25_results = self.bm25.search(query, top_k)
-        dense_results = self.chroma.search(query, top_k)
+        pool_size = max(top_k * 2, 15)
+        bm25_results = self.bm25.search(query, pool_size)
+        dense_results = self.chroma.search(query, pool_size)
 
         merged = {}
         for result in bm25_results:
@@ -67,7 +68,7 @@ class SourceTextRetriever:
                 if dense_max > dense_min
                 else 0.0
             )
-            item["text_score"] = 0.45 * bm_norm + 0.55 * dense_norm
+            item["text_score"] = 0.50 * max(bm_norm, dense_norm) + 0.25 * bm_norm + 0.25 * dense_norm
             item["source_type"] = self.source_type
             item["source_id"] = item["metadata"].get("source_id")
 

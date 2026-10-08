@@ -16,12 +16,19 @@ from src.indexing.text_embedder import TextEmbedder
 
 
 class ChromaTextRetriever:
+    """DEPRECATED: Use src.retrieval.source_text_retriever.SourceTextRetriever instead."""
 
     def __init__(
         self,
         persist_directory="data/processed/chroma",
         collection_name="space_rag_text"
     ):
+        import warnings
+        warnings.warn(
+            "ChromaTextRetriever is deprecated. Use SourceTextRetriever for source-aware retrieval.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
         print("Loading ChromaDB...")
 

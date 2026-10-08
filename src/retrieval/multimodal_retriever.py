@@ -7,6 +7,16 @@ from src.retrieval.query_modality import QueryModalityDetector
 from src.retrieval.source_text_retriever import SourceTextRetriever
 from src.retrieval.source_visual_retriever import SourceVisualRetriever
 
+_SHARED_RERANKER = None
+
+
+def get_shared_reranker():
+    global _SHARED_RERANKER
+    if _SHARED_RERANKER is None:
+        from sentence_transformers import CrossEncoder
+        _SHARED_RERANKER = CrossEncoder("BAAI/bge-reranker-base")
+    return _SHARED_RERANKER
+
 
 class SourceAwareMultimodalRetriever:
     """
@@ -161,6 +171,16 @@ class SourceAwareMultimodalRetriever:
         if info.modality in {"visual", "multimodal"}:
             self._verify_selected(values, query, limit=min(2, len(values)))
 
+        # Check if query specifically targets the attached private document
+        import re
+        doc_intent_re = re.compile(r"\b(pdf|document|paper|attachment|attached|uploaded|mentioned in)\b", re.I)
+        query_targets_private = bool(self.private_text) and bool(doc_intent_re.search(query))
+
+        if query_targets_private:
+            private_items = [x for x in values if x.get("source_type") == "private"]
+            corpus_items = [x for x in values if x.get("source_type") == "corpus"]
+            values = private_items + corpus_items
+
         final = values[:top_k]
         for rank, item in enumerate(final, start=1):
             item["rank"] = rank
@@ -181,27 +201,30 @@ class SourceAwareMultimodalRetriever:
     def _rerank_candidates(self, candidates: List[dict], query: str):
         """Cross-encoder reranking over fused candidates."""
         try:
-            from sentence_transformers import CrossEncoder
+            import re
+            doc_intent_re = re.compile(r"\b(pdf|document|paper|attachment|attached|uploaded|mentioned in)\b", re.I)
+            query_targets_private = bool(self.private_text) and bool(doc_intent_re.search(query))
 
-            if not hasattr(self, "_reranker") or self._reranker is None:
-                self._reranker = CrossEncoder("BAAI/bge-reranker-base")
+            reranker = get_shared_reranker()
 
             text_items = [c for c in candidates if (c.get("text") or "").strip()]
             if not text_items:
                 return
 
             pairs = [(query, c["text"][:1000]) for c in text_items]
-            scores = self._reranker.predict(pairs)
+            scores = reranker.predict(pairs)
 
             for item, bge_score in zip(text_items, scores):
                 item["bge_score"] = float(bge_score)
                 norm_bge = max(0.0, min(1.0, float(bge_score)))
-                private_bonus = 0.05 if item.get("source_type") == "private" else 0.0
+                is_private = item.get("source_type") == "private"
+                private_bonus = 0.25 if (query_targets_private and is_private) else (0.05 if is_private else 0.0)
                 item["fusion_score"] = 0.60 * item.get("fusion_score", 0.0) + 0.40 * norm_bge + private_bonus
 
             candidates.sort(key=lambda x: (x["fusion_score"], x.get("source_type") == "private"), reverse=True)
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Reranking error: {e}")
 
     @staticmethod
     def _add_visual_results(retriever, query, top_k, bucket):

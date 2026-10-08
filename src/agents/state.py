@@ -9,6 +9,9 @@ class SpaceRAGState(TypedDict, total=False):
     document_name: str | None
     corpus_root: str
     query: str
+    standalone_query: str
+    chat_history: List[Dict[str, str]]
+    api_key: str | None
     top_k: int
     retrieval_k: int
     query_modality: str

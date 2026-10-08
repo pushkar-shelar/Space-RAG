@@ -17,8 +17,8 @@ def chunk_document(
     text_dir: str | Path,
     source_type: str,
     source_id: str,
-    chunk_size: int = 1000,
-    overlap: int = 200,
+    chunk_size: int = 1200,
+    overlap: int = 250,
 ) -> List[Dict]:
     """Chunk only the supplied source directory."""
     if overlap >= chunk_size:

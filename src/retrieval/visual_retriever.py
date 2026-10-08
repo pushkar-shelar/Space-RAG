@@ -12,12 +12,19 @@ from src.indexing.colpali_embedder import ColPaliEmbedder
 
 
 class VisualRetriever:
+    """DEPRECATED: Use src.retrieval.source_visual_retriever.SourceVisualRetriever instead."""
 
     def __init__(
         self,
         embeddings_root="data/processed/embeddings",
         pages_dir="data/processed/pages"
     ):
+        import warnings
+        warnings.warn(
+            "VisualRetriever is deprecated. Use SourceVisualRetriever for source-aware retrieval.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.embeddings_root = Path(embeddings_root)
         self.pages_dir = Path(pages_dir)
         self.embedder = ColPaliEmbedder()

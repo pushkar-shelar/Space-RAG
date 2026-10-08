@@ -69,6 +69,11 @@ def cleanup_session(
     base_dir: Optional[str | Path] = None,
 ) -> bool:
     import gc
+    try:
+        from src.agents.workflow import reset_session_retriever
+        reset_session_retriever(session_id)
+    except Exception:
+        pass
 
     session_root = get_session_root(session_id, base_dir)
     if not session_root.exists() or not session_root.is_dir():

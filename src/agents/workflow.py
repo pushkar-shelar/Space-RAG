@@ -52,9 +52,59 @@ def get_answer_generator():
     return _answer_generator
 
 
+def condense_query_with_history(query: str, chat_history: list | None) -> str:
+    """Resolve pronouns and context from conversation history without slow LLM calls."""
+    if not chat_history:
+        return query
+
+    import re
+
+    # If query is self-contained and detailed with specific identifier/acronym, do not alter
+    has_specific_id = bool(re.search(r"\b[A-Z0-9#-]{3,}\b", query))
+    if len(query.strip().split()) >= 7 and has_specific_id:
+        return query
+
+    # Words indicating anaphora/follow-up
+    pronoun_pattern = re.compile(
+        r"\b(it|its|they|them|their|this|that|these|those)\b",
+        re.IGNORECASE,
+    )
+    is_followup = bool(pronoun_pattern.search(query)) or len(query.strip().split()) < 5
+
+    if not is_followup:
+        return query
+
+    # Extract key technical terms and capitalized entities from previous messages
+    entities = []
+    for msg in reversed(chat_history[-4:]):
+        content = msg.get("content", "")
+        # Find acronyms / model names like TROPICS, NASA, GSFC, SAR, Qwen, etc.
+        matches = re.findall(r"\b[A-Z0-9-]{3,}\b", content)
+        for m in matches:
+            if m.lower() not in ("what", "when", "where", "which", "this", "that", "from", "with", "have"):
+                if m not in entities:
+                    entities.append(m)
+        # Check for page numbers
+        p_matches = re.findall(r"\bpage\s+(\d+)\b", content, re.IGNORECASE)
+        if p_matches and "page" not in query.lower():
+            entities.append(f"page {p_matches[-1]}")
+
+    if entities:
+        # Prepend up to 2 unique key entities to search query
+        key_context = " ".join(entities[:2])
+        if key_context.lower() not in query.lower():
+            return f"{key_context} {query}"
+
+    return query
+
+
 def understand_query(state: SpaceRAGState):
-    info = QueryModalityDetector().detect(state["query"])
+    raw_query = state["query"]
+    history = state.get("chat_history")
+    standalone = condense_query_with_history(raw_query, history)
+    info = QueryModalityDetector().detect(standalone)
     return {
+        "standalone_query": standalone,
         "query_modality": info.modality,
         "page_reference": info.page_reference,
     }
@@ -66,8 +116,9 @@ def retrieve_evidence(state: SpaceRAGState):
         corpus_root=state["corpus_root"],
         session_root=state.get("session_root"),
     )
+    search_query = state.get("standalone_query") or state["query"]
     result = retriever.retrieve(
-        state["query"],
+        search_query,
         top_k=state.get("top_k", 5),
         retrieval_k=state.get("retrieval_k", 10),
     )
@@ -107,6 +158,8 @@ def generate_answer(state: SpaceRAGState):
         query=state["query"],
         retrieval_results=state.get("retrieval_results", []),
         model_mode=state.get("model_mode", "offline"),
+        chat_history=state.get("chat_history"),
+        api_key=state.get("api_key"),
     )
     return {
         "answer": result["answer"],
@@ -145,6 +198,8 @@ def run_space_rag(
     corpus_root: str | Path = DEFAULT_CORPUS_ROOT,
     top_k: int = 5,
     retrieval_k: int = 10,
+    chat_history: list | None = None,
+    api_key: str | None = None,
 ):
     state: SpaceRAGState = {
         "session_id": session_id,
@@ -155,5 +210,50 @@ def run_space_rag(
         "top_k": top_k,
         "retrieval_k": retrieval_k,
         "model_mode": model_mode,
+        "chat_history": chat_history or [],
+        "api_key": api_key,
     }
     return _GRAPH.invoke(state)
+
+
+def stream_space_rag_answer(
+    query: str,
+    session_id: str | None = None,
+    session_root: str | Path | None = None,
+    document_name: str | None = None,
+    model_mode: str = "offline",
+    corpus_root: str | Path = DEFAULT_CORPUS_ROOT,
+    top_k: int = 5,
+    retrieval_k: int = 10,
+    chat_history: list | None = None,
+    api_key: str | None = None,
+):
+    """Executes retrieval and verification, then yields streaming tokens."""
+    retriever = get_retriever(session_id, corpus_root, session_root)
+    search_query = condense_query_with_history(query, chat_history)
+    retrieval_info = retriever.retrieve(search_query, top_k=top_k, retrieval_k=retrieval_k)
+    results = retrieval_info["results"]
+
+    gen = get_answer_generator()
+    stream = gen.generate_stream(
+        query=query,
+        retrieval_results=results,
+        model_mode=model_mode,
+        chat_history=chat_history,
+        api_key=api_key,
+    )
+
+    citations = []
+    seen = set()
+    for r in results:
+        cit = gen._private_citation(r)
+        if cit and cit not in seen:
+            seen.add(cit)
+            citations.append(cit)
+
+    return {
+        "stream": stream,
+        "citations": citations,
+        "source_mix": retrieval_info["source_mix"],
+        "retrieval_results": results,
+    }
