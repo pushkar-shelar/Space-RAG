@@ -12,6 +12,10 @@ __pycache__/
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.cert
+
 
 # IDE files
 .vscode/
