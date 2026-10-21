@@ -18,10 +18,12 @@ def get_shared_qwen(model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"):
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         _SHARED_QWEN_TOKENIZER = AutoTokenizer.from_pretrained(model_name)
+        dev = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = torch.bfloat16 if dev == "cuda" else torch.float32
         _SHARED_QWEN_MODEL = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype=torch.bfloat16,
-            device_map="cpu",
+            torch_dtype=dtype,
+            device_map=dev,
         ).eval()
         _SHARED_QWEN_NAME = model_name
     return _SHARED_QWEN_MODEL, _SHARED_QWEN_TOKENIZER
@@ -300,7 +302,7 @@ For private evidence from attached documents, cite the document and page number 
             max_length=6000,
         )
 
-        with torch.no_grad():
+        with torch.inference_mode():
             output = self._model.generate(
                 **inputs,
                 max_new_tokens=700,

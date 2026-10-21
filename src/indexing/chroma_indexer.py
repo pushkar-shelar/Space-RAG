@@ -9,6 +9,8 @@ from sentence_transformers import SentenceTransformer
 
 from src.indexing.text_chunker import chunk_document
 
+_DENSE_QUERY_CACHE: dict[tuple[str, str], list[float]] = {}
+
 
 class ChromaTextIndex:
     """Persistent Chroma index scoped to exactly one source."""
@@ -108,11 +110,18 @@ class ChromaTextIndex:
         if self.collection.count() == 0:
             return []
 
-        query_embedding = self._get_model().encode(
-            [query],
-            normalize_embeddings=True,
-            show_progress_bar=False,
-        )[0].tolist()
+        cache_key = (self.embedding_model_name, query)
+        if cache_key in _DENSE_QUERY_CACHE:
+            query_embedding = _DENSE_QUERY_CACHE[cache_key]
+        else:
+            query_embedding = self._get_model().encode(
+                [query],
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            )[0].tolist()
+            if len(_DENSE_QUERY_CACHE) > 512:
+                _DENSE_QUERY_CACHE.pop(next(iter(_DENSE_QUERY_CACHE)))
+            _DENSE_QUERY_CACHE[cache_key] = query_embedding
 
         result = self.collection.query(
             query_embeddings=[query_embedding],

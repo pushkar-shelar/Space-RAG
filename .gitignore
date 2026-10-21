@@ -51,3 +51,8 @@ data/processed/chroma/
 
 # Redundant duplicate folder
 space_rag_source_aware/
+
+# Node & Frontend dependencies
+node_modules/
+frontend/node_modules/
+frontend/dist/

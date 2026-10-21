@@ -30,11 +30,17 @@ def get_shared_colpali(model_name: str = "vidore/colpali-v1.3", device: str | No
     return _SHARED_COLPALI_MODEL, _SHARED_COLPALI_PROCESSOR
 
 
+_COLPALI_TENSOR_CACHE: dict[str, tuple[float, list]] = {}
+_COLPALI_QUERY_CACHE: dict[tuple[str, str], torch.Tensor] = {}
+
+
 def release_shared_colpali():
     global _SHARED_COLPALI_MODEL, _SHARED_COLPALI_PROCESSOR, _SHARED_MODEL_KEY
     _SHARED_COLPALI_MODEL = None
     _SHARED_COLPALI_PROCESSOR = None
     _SHARED_MODEL_KEY = None
+    _COLPALI_TENSOR_CACHE.clear()
+    _COLPALI_QUERY_CACHE.clear()
     import gc
     gc.collect()
     if torch.cuda.is_available():
@@ -98,13 +104,30 @@ class ColPaliPageIndex:
 
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
         torch.save({"items": items}, self.index_path)
+        path_str = str(self.index_path.resolve())
+        _COLPALI_TENSOR_CACHE[path_str] = (self.index_path.stat().st_mtime, items)
         return len(items)
 
     def load_items(self):
         if not self.index_path.exists():
             return []
+        path_str = str(self.index_path.resolve())
+        try:
+            mtime = self.index_path.stat().st_mtime
+            if path_str in _COLPALI_TENSOR_CACHE:
+                cached_mtime, cached_items = _COLPALI_TENSOR_CACHE[path_str]
+                if cached_mtime == mtime:
+                    return cached_items
+        except OSError:
+            pass
+
         data = torch.load(self.index_path, map_location="cpu", weights_only=False)
-        return data.get("items", [])
+        items = data.get("items", [])
+        try:
+            _COLPALI_TENSOR_CACHE[path_str] = (self.index_path.stat().st_mtime, items)
+        except OSError:
+            pass
+        return items
 
     def search(self, query: str, top_k: int = 10) -> List[dict]:
         items = self.load_items()
@@ -112,15 +135,24 @@ class ColPaliPageIndex:
             return []
 
         self._load_model()
-        batch_queries = self.processor.process_queries([query]).to(self.model.device)
-        with torch.no_grad():
-            query_embedding = self.model(**batch_queries).detach().cpu()
+        cache_key = (self.model_name, query)
+        if cache_key in _COLPALI_QUERY_CACHE:
+            query_embedding = _COLPALI_QUERY_CACHE[cache_key]
+        else:
+            batch_queries = self.processor.process_queries([query]).to(self.model.device)
+            with torch.inference_mode():
+                query_embedding = self.model(**batch_queries).detach().cpu()
+            # Keep cache bounded to 128 queries
+            if len(_COLPALI_QUERY_CACHE) > 128:
+                _COLPALI_QUERY_CACHE.pop(next(iter(_COLPALI_QUERY_CACHE)))
+            _COLPALI_QUERY_CACHE[cache_key] = query_embedding
 
         doc_embeddings = [item["embedding"] for item in items]
-        scores = self.processor.score_multi_vector(
-            query_embedding,
-            doc_embeddings,
-        )
+        with torch.inference_mode():
+            scores = self.processor.score_multi_vector(
+                query_embedding,
+                doc_embeddings,
+            )
         scores = scores.detach().cpu().flatten().tolist()
 
         order = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
@@ -135,3 +167,4 @@ class ColPaliPageIndex:
                 }
             )
         return output
+

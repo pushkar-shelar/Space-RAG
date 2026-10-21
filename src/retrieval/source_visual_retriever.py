@@ -34,9 +34,12 @@ class SourceVisualRetriever:
         self.index.build(page_images, metadata)
 
     def available(self) -> bool:
-        if self.source_type == "private":
-            self._ensure_private_index()
-        return self.index_path.exists()
+        if self.source_type == "corpus":
+            return self.index_path.exists()
+        if self.index_path.exists():
+            return True
+        pages_dir = self.root / "pages"
+        return pages_dir.exists() and any(pages_dir.glob("*.png"))
 
     def search(self, query: str, top_k: int = 10):
         self._ensure_private_index()

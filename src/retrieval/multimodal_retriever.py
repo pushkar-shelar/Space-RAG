@@ -8,6 +8,7 @@ from src.retrieval.source_text_retriever import SourceTextRetriever
 from src.retrieval.source_visual_retriever import SourceVisualRetriever
 
 _SHARED_RERANKER = None
+_RERANK_PAIR_CACHE: dict[tuple[str, str], float] = {}
 
 
 def get_shared_reranker():
@@ -198,24 +199,43 @@ class SourceAwareMultimodalRetriever:
             "source_mix": source_mix,
         }
 
-    def _rerank_candidates(self, candidates: List[dict], query: str):
-        """Cross-encoder reranking over fused candidates."""
+    def _rerank_candidates(self, candidates: List[dict], query: str, max_candidates: int = 10):
+        """Cross-encoder reranking over fused candidates with caching and batch optimization."""
         try:
             import re
+            import torch
             doc_intent_re = re.compile(r"\b(pdf|document|paper|attachment|attached|uploaded|mentioned in)\b", re.I)
             query_targets_private = bool(self.private_text) and bool(doc_intent_re.search(query))
 
             reranker = get_shared_reranker()
 
-            text_items = [c for c in candidates if (c.get("text") or "").strip()]
+            text_items = [c for c in candidates if (c.get("text") or "").strip()][:max_candidates]
             if not text_items:
                 return
 
-            pairs = [(query, c["text"][:1000]) for c in text_items]
-            scores = reranker.predict(pairs)
+            unseen_pairs = []
+            unseen_indices = []
 
-            for item, bge_score in zip(text_items, scores):
-                item["bge_score"] = float(bge_score)
+            for idx, c in enumerate(text_items):
+                pair_key = (query, c["text"][:1000])
+                if pair_key in _RERANK_PAIR_CACHE:
+                    c["bge_score"] = _RERANK_PAIR_CACHE[pair_key]
+                else:
+                    unseen_pairs.append(pair_key)
+                    unseen_indices.append(idx)
+
+            if unseen_pairs:
+                with torch.inference_mode():
+                    new_scores = reranker.predict(unseen_pairs, batch_size=8, show_progress_bar=False)
+                for pair_key, idx, score in zip(unseen_pairs, unseen_indices, new_scores):
+                    score_val = float(score)
+                    if len(_RERANK_PAIR_CACHE) > 1024:
+                        _RERANK_PAIR_CACHE.pop(next(iter(_RERANK_PAIR_CACHE)))
+                    _RERANK_PAIR_CACHE[pair_key] = score_val
+                    text_items[idx]["bge_score"] = score_val
+
+            for item in text_items:
+                bge_score = item.get("bge_score", 0.0)
                 norm_bge = max(0.0, min(1.0, float(bge_score)))
                 is_private = item.get("source_type") == "private"
                 private_bonus = 0.25 if (query_targets_private and is_private) else (0.05 if is_private else 0.0)
