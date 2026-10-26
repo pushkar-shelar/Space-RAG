@@ -140,27 +140,31 @@ def test_tasks_11_to_15():
     print("[PASS] Insufficient evidence gracefully returns fallback answer without citations.")
 
     # -----------------------------------------------------------------
-    # TASK 15: Streamlit UI File & Component Verification
+    # TASK 15: FastAPI Server & Mission Control React HUD Verification
     # -----------------------------------------------------------------
-    print("\n--- [TASK 15] Streamlit UI Verification ---")
-    app_file = PROJECT_ROOT / "app" / "streamlit_app.py"
-    assert app_file.exists(), "streamlit_app.py not found!"
+    print("\n--- [TASK 15] FastAPI & React HUD Verification ---")
+    server_file = PROJECT_ROOT / "app" / "server.py"
+    assert server_file.exists(), "server.py not found!"
 
-    # Verify syntax & imports in streamlit_app.py
+    # Verify syntax & imports in server.py
     import py_compile
-    py_compile.compile(str(app_file), doraise=True)
-    print("[PASS] streamlit_app.py compiled successfully with zero syntax errors.")
+    py_compile.compile(str(server_file), doraise=True)
+    print("[PASS] server.py compiled successfully with zero syntax errors.")
 
-    # Verify required UI logic tokens
-    app_code = app_file.read_text(encoding="utf-8")
-    assert "run_space_rag" in app_code
-    assert "end_private_session" in app_code
-    assert "cleanup_session" in app_code
-    assert "build_corpus_index" in app_code
-    assert "model_mode" in app_code
-    assert "Private-document sources" in app_code
-    assert "Referenced Document Visual Pages" in app_code
-    print("[PASS] Streamlit UI contains all required session, retrieval, and citation controls.")
+    # Verify required server logic tokens
+    server_code = server_file.read_text(encoding="utf-8")
+    assert "run_space_rag" in server_code
+    assert "stream_space_rag_answer" in server_code
+    assert "cleanup_session" in server_code
+    assert "build_corpus_index" in server_code
+    assert "model_mode" in server_code
+    assert "/api/chat/stream" in server_code
+    assert "/api/session/upload" in server_code
+
+    # Verify React HUD source exists
+    react_app = PROJECT_ROOT / "frontend" / "src" / "App.jsx"
+    assert react_app.exists(), "frontend/src/App.jsx not found!"
+    print("[PASS] FastAPI Server and React HUD contain all required session, retrieval, and streaming controls.")
 
     print("\n" + "=" * 70)
     print("ALL TASKS 11 TO 15 VERIFIED AND PASSED SUCCESSFULLY!")

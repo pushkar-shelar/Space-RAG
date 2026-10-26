@@ -17,9 +17,7 @@ import {
   X,
   Key,
   Layers,
-  Activity,
   Sliders,
-  Sparkles,
   ChevronRight,
   Database
 } from 'lucide-react';
@@ -475,59 +473,6 @@ export default function App() {
                 </div>
               </div>
             )}
-          </div>
-
-          {/* TELEMETRY READOUT METRICS */}
-          <div>
-            <div className="section-label">
-              <Activity size={13} />
-              <span>Retrieval Telemetry</span>
-            </div>
-            <div className="telemetry-grid">
-              <div className="telemetry-card">
-                <div className="telemetry-card-title">Hit Rate @3</div>
-                <div className="telemetry-card-value">93.3%</div>
-                <div className="telemetry-card-sub">Hybrid Multimodal</div>
-              </div>
-              <div className="telemetry-card">
-                <div className="telemetry-card-title">MRR Score</div>
-                <div className="telemetry-card-value">0.900</div>
-                <div className="telemetry-card-sub">Rank Reciprocal</div>
-              </div>
-              <div className="telemetry-card">
-                <div className="telemetry-card-title">BM25 Chunks</div>
-                <div className="telemetry-card-value">
-                  {systemStatus?.corpus?.bm25_chunks || '84'}
-                </div>
-                <div className="telemetry-card-sub">Lexical Inverted</div>
-              </div>
-              <div className="telemetry-card">
-                <div className="telemetry-card-title">ColPali Pages</div>
-                <div className="telemetry-card-value">
-                  {systemStatus?.corpus?.visual_pages || '26'}
-                </div>
-                <div className="telemetry-card-sub">Multi-Vector 150DPI</div>
-              </div>
-            </div>
-          </div>
-
-          {/* SUGGESTED TARGET PROMPTS */}
-          <div>
-            <div className="section-label">
-              <Sparkles size={13} />
-              <span>Suggested Inquiries</span>
-            </div>
-            <div className="suggested-prompts-list">
-              {suggestedQueries.map((prompt, idx) => (
-                <button
-                  key={idx}
-                  className="suggested-prompt-btn"
-                  onClick={() => handleTransmit(prompt)}
-                >
-                  {prompt}
-                </button>
-              ))}
-            </div>
           </div>
         </aside>
 

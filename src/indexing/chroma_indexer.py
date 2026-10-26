@@ -73,7 +73,8 @@ class ChromaTextIndex:
         clean_documents = []
 
         for chunk, embedding in zip(all_chunks, embeddings):
-            chunk_id = hashlib.sha1(chunk["id"].encode()).hexdigest()
+            raw_id = f"{chunk.get('document', '')}:{chunk['id']}:{chunk.get('chunk_index', 0)}"
+            chunk_id = hashlib.sha1(raw_id.encode()).hexdigest()
             ids.append(chunk_id)
             metadatas.append(
                 {

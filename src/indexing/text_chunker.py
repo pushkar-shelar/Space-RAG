@@ -34,6 +34,7 @@ def chunk_document(
             continue
 
         page_number = _page_number(path)
+        doc_name = path.name.rsplit("_page_", 1)[0]
         start = 0
         chunk_index = 0
 
@@ -43,11 +44,11 @@ def chunk_document(
             if chunk_text:
                 chunks.append(
                     {
-                        "id": f"{source_id}:{page_number}:{chunk_index}",
+                        "id": f"{source_id}:{doc_name}:{page_number}:{chunk_index}",
                         "text": chunk_text,
                         "source_type": source_type,
                         "source_id": source_id,
-                        "document": path.name.rsplit("_page_", 1)[0],
+                        "document": doc_name,
                         "page_number": page_number,
                         "chunk_index": chunk_index,
                         "text_path": str(path),

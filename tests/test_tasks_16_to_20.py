@@ -149,9 +149,10 @@ def test_tasks_16_to_20():
     assert (corpus_root / "chroma").exists(), "Corpus Chroma index missing!"
     print("[PASS] Permanent knowledge corpus index files complete and intact.")
 
-    streamlit_file = PROJECT_ROOT / "app" / "streamlit_app.py"
-    assert streamlit_file.exists()
-    print("[PASS] Streamlit application ready at app/streamlit_app.py.")
+    server_file = PROJECT_ROOT / "app" / "server.py"
+    assert server_file.exists()
+    assert (PROJECT_ROOT / "frontend" / "src" / "App.jsx").exists()
+    print("[PASS] Mission Control FastAPI Server and React HUD ready.")
 
     print("\n" + "=" * 70)
     print("ALL TASKS 16 TO 20 VERIFIED AND PASSED SUCCESSFULLY!")

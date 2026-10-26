@@ -70,7 +70,7 @@ class ColPaliPageIndex:
         self,
         page_images: Iterable[str | Path],
         metadata: Iterable[dict],
-        batch_size: int = 2,
+        batch_size: int = 4,
     ) -> int:
         page_images = [Path(p) for p in page_images]
         metadata = list(metadata)

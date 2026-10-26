@@ -68,11 +68,11 @@ python -m src.indexing.corpus_builder
 
 This builds the permanent BM25, Chroma, and ColPali indexes.
 
-The Streamlit UI also has a **Build / Refresh Corpus Index** button.
+The Mission Control UI also has a **Re-Sync Knowledge Corpus** action.
 
 ## Private session
 
-Upload a PDF in Streamlit.
+Upload a PDF in the Mission Control UI sandbox.
 
 The upload is copied into the new session directory, not into `data/corpus`.
 
@@ -141,7 +141,9 @@ The new multimodal retriever calls it only for visual/multimodal queries.
 From the project root:
 
 ```powershell
-streamlit run app/streamlit_app.py
+.\scripts\start_server.ps1
+# Or launch React dev mode:
+.\scripts\start_react_ui.ps1
 ```
 
 ## Important migration note

@@ -17,11 +17,11 @@ flowchart TD
         direction TB
         User(["🧑‍🚀 Aerospace Engineer / User"])
         
-        subgraph Streamlit_App ["🖥️ Streamlit App (app/streamlit_app.py)"]
-            ChatUI["💬 Interactive Chat Interface<br/>• Real-time token streaming (st.write_stream)<br/>• Session chat history persistence<br/>• Suggested aerospace prompt pills"]
+        subgraph Mission_Control_HUD ["🚀 Mission Control HUD (frontend/ & app/server.py)"]
+            ChatUI["💬 Interactive Mission Control HUD<br/>• Real-time SSE token streaming<br/>• Session chat history persistence<br/>• Suggested aerospace telemetry pills"]
             DocUpload["📎 Private Document Sandbox<br/>• Drag-and-drop PDF uploader<br/>• Live active document badge<br/>• Ephemeral session detach & teardown"]
             SysControls["⚙️ Engine & Knowledge Controls<br/>• Offline (Qwen) vs Online (Grok) toggle<br/>• Memory-only xAI API Key input<br/>• One-click knowledge index re-sync"]
-            VisualExpander["🖼️ Referenced Visual Pages Expander<br/>• Dynamic rendering of top retrieved 150 DPI pages"]
+            VisualExpander["🖼️ Referenced Visual Pages Expander<br/>• Interactive lightbox inspector for 150 DPI pages"]
         end
 
         User <-->|"Natural Language Prompt"| ChatUI
@@ -172,13 +172,13 @@ flowchart TD
 ## 3. Component Architecture Breakdown
 
 ### 3.1 Layer 1: Presentation & Session Sandbox
-* **Implementation**: [`app/streamlit_app.py`](file:///c:/Users/Pushkar%20Shelar/Desktop/Space%20RAG/app/streamlit_app.py)
+* **Implementation**: [`frontend/`](file:///c:/Users/Pushkar%20Shelar/Desktop/Space%20RAG/frontend) and [`app/server.py`](file:///c:/Users/Pushkar%20Shelar/Desktop/Space%20RAG/app/server.py)
 * **Responsibilities**:
-  * Renders a responsive, modern dark-themed aerospace UI with custom Google Fonts (`Outfit` and `Inter`).
-  * Manages real-time token streaming (`stream_space_rag_answer`) via Python generators.
+  * Renders a responsive, modern dark-themed aerospace Mission Control HUD with glassmorphism and Lucide icons.
+  * Manages real-time token streaming via Server-Sent Events (SSE).
   * Handles private PDF uploads with immediate file isolation and active session badge displays.
   * Provides manual and automatic sandbox teardown, detaching session indices safely from disk.
-  * Displays referenced document pages as high-resolution images when visual evidence is cited.
+  * Displays referenced document pages in an interactive lightbox modal inspector.
 
 ---
 
@@ -309,7 +309,8 @@ Empirical evaluation from [`data/benchmark_evaluation_results.json`](file:///c:/
 ```text
 Space RAG/
 ├── app/
-│   └── streamlit_app.py               # Layer 1: Streamlit presentation UI & token streaming
+│   └── server.py                      # Layer 1: FastAPI Mission Control server & static HUD server
+├── frontend/                          # Layer 1: React + Vite Mission Control HUD
 ├── configs/
 │   └── config.yaml                    # System configuration & model designations
 ├── data/
