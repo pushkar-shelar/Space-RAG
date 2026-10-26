@@ -11,21 +11,56 @@ _SHARED_QWEN_TOKENIZER = None
 _SHARED_QWEN_NAME = None
 
 
+def _get_configured_reasoning_model() -> str:
+    env_model = os.getenv("OFFLINE_MODEL")
+    if env_model:
+        return env_model
+    config_path = Path(__file__).resolve().parents[2] / "configs" / "config.yaml"
+    if config_path.exists():
+        try:
+            import yaml
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f)
+            model = cfg.get("models", {}).get("reasoning")
+            if model:
+                return model
+        except Exception:
+            pass
+    return "Qwen/Qwen2.5-1.5B-Instruct"
+
+
 def get_shared_qwen(model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"):
     global _SHARED_QWEN_MODEL, _SHARED_QWEN_TOKENIZER, _SHARED_QWEN_NAME
-    if _SHARED_QWEN_MODEL is None or _SHARED_QWEN_NAME != model_name:
+    target_name = model_name
+    if _SHARED_QWEN_MODEL is None or _SHARED_QWEN_NAME != target_name:
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        _SHARED_QWEN_TOKENIZER = AutoTokenizer.from_pretrained(model_name)
-        dev = "cuda" if torch.cuda.is_available() else "cpu"
-        dtype = torch.bfloat16 if dev == "cuda" else torch.float32
-        _SHARED_QWEN_MODEL = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=dtype,
-            device_map=dev,
-        ).eval()
-        _SHARED_QWEN_NAME = model_name
+        try:
+            _SHARED_QWEN_TOKENIZER = AutoTokenizer.from_pretrained(target_name)
+            dev = "cuda" if torch.cuda.is_available() else "cpu"
+            dtype = torch.bfloat16 if dev == "cuda" else torch.float32
+            _SHARED_QWEN_MODEL = AutoModelForCausalLM.from_pretrained(
+                target_name,
+                torch_dtype=dtype,
+                device_map=dev,
+            ).eval()
+            _SHARED_QWEN_NAME = target_name
+        except Exception as e:
+            # Fallback to 1.5B if higher parameter model (e.g. 7B) fails or not cached
+            if target_name != "Qwen/Qwen2.5-1.5B-Instruct":
+                print(f"[Warning] Failed to load {target_name}: {e}. Falling back to Qwen/Qwen2.5-1.5B-Instruct.")
+                _SHARED_QWEN_TOKENIZER = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B-Instruct")
+                dev = "cuda" if torch.cuda.is_available() else "cpu"
+                dtype = torch.bfloat16 if dev == "cuda" else torch.float32
+                _SHARED_QWEN_MODEL = AutoModelForCausalLM.from_pretrained(
+                    "Qwen/Qwen2.5-1.5B-Instruct",
+                    torch_dtype=dtype,
+                    device_map=dev,
+                ).eval()
+                _SHARED_QWEN_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
+            else:
+                raise e
     return _SHARED_QWEN_MODEL, _SHARED_QWEN_TOKENIZER
 
 
@@ -60,7 +95,8 @@ class AnswerGenerator:
 
     def _load_offline(self):
         if self._model is None or self._tokenizer is None:
-            self._model, self._tokenizer = get_shared_qwen(self.offline_model_name)
+            target = os.getenv("OFFLINE_MODEL") or self.offline_model_name
+            self._model, self._tokenizer = get_shared_qwen(target)
 
     def _load_grok(self, api_key: Optional[str] = None):
         key = api_key or os.getenv("XAI_API_KEY")

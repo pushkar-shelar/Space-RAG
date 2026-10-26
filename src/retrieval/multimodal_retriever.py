@@ -152,7 +152,7 @@ class SourceAwareMultimodalRetriever:
 
             # Small private-session preference when evidence is otherwise equal.
             # This is a tie-break, not the only retrieval signal.
-            if item["source_type"] == "private":
+            if item["source_type"] == "private" and t > 0.3:
                 item["fusion_score"] += 0.03
 
         # Protect explicit page references.

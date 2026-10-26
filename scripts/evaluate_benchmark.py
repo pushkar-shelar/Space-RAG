@@ -19,6 +19,9 @@ import time
 from pathlib import Path
 import sys
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -165,7 +168,9 @@ def run_benchmark():
     print("=" * 70)
 
     # 1. Setup session with publication_6_.pdf
-    pdf_source = Path(r"C:\Users\Pushkar Shelar\.gemini\antigravity-ide\brain\bf7021f0-e387-46ab-8c6e-340568fc3990\.user_uploaded\media_1790941417366.pdf")
+    pdf_source = PROJECT_ROOT / "data" / "benchmark" / "publication_6_.pdf"
+    if not pdf_source.exists():
+        pdf_source = PROJECT_ROOT / "data" / "corpus" / "publication_6_.pdf"
     if not pdf_source.exists():
         raise FileNotFoundError(f"PDF source not found: {pdf_source}")
 
@@ -182,8 +187,6 @@ def run_benchmark():
     private_text = SourceTextRetriever(session_root, "private")
     corpus_text = SourceTextRetriever(corpus_root, "corpus")
     spacebot = SourceAwareMultimodalRetriever(corpus_root=corpus_root, session_root=session_root)
-    # Use corpus pre-indexed ColPali for visual queries during evaluation to prevent CPU memory thrashing
-    spacebot.private_visual = None
 
     results_dense = []
     results_bm25 = []

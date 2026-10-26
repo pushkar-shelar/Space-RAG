@@ -62,12 +62,9 @@ class SourceTextRetriever:
         dense_max = max(dense_values) if dense_values else 1.0
 
         for item in items:
-            bm_norm = item["bm25_score"] / bm_max if bm_max > 0 else 0.0
-            dense_norm = (
-                (item["dense_score"] - dense_min) / (dense_max - dense_min)
-                if dense_max > dense_min
-                else 0.0
-            )
+            bm_scale = max(6.0, bm_max)
+            bm_norm = min(1.0, max(0.0, item["bm25_score"]) / bm_scale) if bm_scale > 0 else 0.0
+            dense_norm = max(0.0, min(1.0, item["dense_score"]))
             item["text_score"] = 0.50 * max(bm_norm, dense_norm) + 0.25 * bm_norm + 0.25 * dense_norm
             item["source_type"] = self.source_type
             item["source_id"] = item["metadata"].get("source_id")

@@ -9,6 +9,7 @@ from src.agents.state import SpaceRAGState
 from src.generation.answer_generator import AnswerGenerator
 from src.retrieval.multimodal_retriever import SourceAwareMultimodalRetriever
 from src.retrieval.query_modality import QueryModalityDetector
+from src.tools.aerospace_calc import check_and_execute_aerospace_calc
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CORPUS_ROOT = PROJECT_ROOT / "data" / "corpus_index"
@@ -98,15 +99,36 @@ def condense_query_with_history(query: str, chat_history: list | None) -> str:
     return query
 
 
+def _decompose_query(query: str) -> list[str]:
+    """Detect comparative or multi-intent queries and decompose into targeted sub-queries."""
+    import re
+    compare_patterns = [
+        r"compare\s+(.+?)\s+(?:with|to|against|and)\s+(.+)",
+        r"difference\s+between\s+(.+?)\s+and\s+(.+)",
+        r"(.+?)\s+versus\s+(.+)",
+        r"(.+?)\s+vs\.?\s+(.+)",
+    ]
+    for pattern in compare_patterns:
+        match = re.search(pattern, query, re.IGNORECASE)
+        if match:
+            part1 = match.group(1).strip(" ?,.")
+            part2 = match.group(2).strip(" ?,.")
+            if len(part1) > 3 and len(part2) > 3:
+                return [part1, part2]
+    return [query]
+
+
 def understand_query(state: SpaceRAGState):
     raw_query = state["query"]
     history = state.get("chat_history")
     standalone = condense_query_with_history(raw_query, history)
     info = QueryModalityDetector().detect(standalone)
+    sub_queries = _decompose_query(standalone)
     return {
         "standalone_query": standalone,
         "query_modality": info.modality,
         "page_reference": info.page_reference,
+        "sub_queries": sub_queries,
     }
 
 
@@ -117,16 +139,64 @@ def retrieve_evidence(state: SpaceRAGState):
         session_root=state.get("session_root"),
     )
     search_query = state.get("standalone_query") or state["query"]
-    result = retriever.retrieve(
-        search_query,
-        top_k=state.get("top_k", 5),
-        retrieval_k=state.get("retrieval_k", 10),
-    )
+    sub_queries = state.get("sub_queries") or [search_query]
+
+    if len(sub_queries) > 1:
+        # Multi-hop comparative search: retrieve across sub-queries and merge
+        combined_results = []
+        seen_keys = set()
+        source_mix = {"corpus": 0, "private": 0}
+        per_query_k = max(2, state.get("top_k", 5) // len(sub_queries) + 1)
+
+        for sub_q in sub_queries:
+            sub_res = retriever.retrieve(
+                sub_q,
+                top_k=per_query_k,
+                retrieval_k=state.get("retrieval_k", 10),
+            )
+            for item in sub_res["results"]:
+                key = (item.get("source_type"), item.get("document"), item.get("page_number"), item.get("chunk_index"))
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    combined_results.append(item)
+                    stype = item.get("source_type", "corpus")
+                    source_mix[stype] = source_mix.get(stype, 0) + 1
+
+        combined_results.sort(key=lambda x: x.get("fusion_score", 0.0), reverse=True)
+        top_results = combined_results[:state.get("top_k", 5)]
+        modality = "multimodal" if any(item.get("page_image") for item in top_results) else "text"
+
+        final_results = top_results
+    else:
+        result = retriever.retrieve(
+            search_query,
+            top_k=state.get("top_k", 5),
+            retrieval_k=state.get("retrieval_k", 10),
+        )
+        final_results = result["results"]
+        modality = result["modality"]
+        source_mix = result["source_mix"]
+
+    # Inject deterministic aerospace calculation if applicable
+    calc = check_and_execute_aerospace_calc(search_query) or check_and_execute_aerospace_calc(state["query"])
+    if calc:
+        calc_item = {
+            "id": f"calculator:{calc['type']}",
+            "text": calc["text"],
+            "source_type": "corpus",
+            "source_id": "astrodynamics_calculator",
+            "document": "Astrodynamics Physics Engine",
+            "page_number": 1,
+            "fusion_score": 1.0,
+        }
+        final_results = [calc_item] + [r for r in final_results if r.get("id") != calc_item["id"]]
+        source_mix["corpus"] = source_mix.get("corpus", 0) + 1
+
     return {
-        "retrieval_results": result["results"],
-        "query_modality": result["modality"],
-        "page_reference": result["page_reference"],
-        "source_mix": result["source_mix"],
+        "retrieval_results": final_results,
+        "query_modality": modality,
+        "page_reference": state.get("page_reference"),
+        "source_mix": source_mix,
     }
 
 
@@ -231,8 +301,42 @@ def stream_space_rag_answer(
     """Executes retrieval and verification, then yields streaming tokens."""
     retriever = get_retriever(session_id, corpus_root, session_root)
     search_query = condense_query_with_history(query, chat_history)
-    retrieval_info = retriever.retrieve(search_query, top_k=top_k, retrieval_k=retrieval_k)
-    results = retrieval_info["results"]
+    sub_queries = _decompose_query(search_query)
+
+    if len(sub_queries) > 1:
+        combined_results = []
+        seen_keys = set()
+        source_mix = {"corpus": 0, "private": 0}
+        per_query_k = max(2, top_k // len(sub_queries) + 1)
+        for sub_q in sub_queries:
+            sub_res = retriever.retrieve(sub_q, top_k=per_query_k, retrieval_k=retrieval_k)
+            for item in sub_res["results"]:
+                key = (item.get("source_type"), item.get("document"), item.get("page_number"), item.get("chunk_index"))
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    combined_results.append(item)
+                    stype = item.get("source_type", "corpus")
+                    source_mix[stype] = source_mix.get(stype, 0) + 1
+        combined_results.sort(key=lambda x: x.get("fusion_score", 0.0), reverse=True)
+        results = combined_results[:top_k]
+    else:
+        retrieval_info = retriever.retrieve(search_query, top_k=top_k, retrieval_k=retrieval_k)
+        results = retrieval_info["results"]
+        source_mix = retrieval_info["source_mix"]
+
+    calc = check_and_execute_aerospace_calc(search_query) or check_and_execute_aerospace_calc(query)
+    if calc:
+        calc_item = {
+            "id": f"calculator:{calc['type']}",
+            "text": calc["text"],
+            "source_type": "corpus",
+            "source_id": "astrodynamics_calculator",
+            "document": "Astrodynamics Physics Engine",
+            "page_number": 1,
+            "fusion_score": 1.0,
+        }
+        results = [calc_item] + [r for r in results if r.get("id") != calc_item["id"]]
+        source_mix["corpus"] = source_mix.get("corpus", 0) + 1
 
     gen = get_answer_generator()
     stream = gen.generate_stream(
@@ -254,6 +358,6 @@ def stream_space_rag_answer(
     return {
         "stream": stream,
         "citations": citations,
-        "source_mix": retrieval_info["source_mix"],
+        "source_mix": source_mix,
         "retrieval_results": results,
     }
